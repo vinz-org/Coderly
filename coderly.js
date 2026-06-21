@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
 import fs from 'fs/promises';
@@ -21,6 +20,7 @@ const green      = chalk.green;
 const yellow     = chalk.yellow;
 const red        = chalk.red;
 const white      = chalk.white;
+const blue       = chalk.hex('#38BDF8');
 
 // ─── Spinner ──────────────────────────────────────────────────────────────────
 const FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
@@ -44,12 +44,290 @@ function createSpinner() {
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-async function getApiKey() {
-    try { return JSON.parse(await fs.readFile(CONFIG_FILE, 'utf8')).apiKey || null; }
-    catch { return null; }
+async function getConfig() {
+    try { return JSON.parse(await fs.readFile(CONFIG_FILE, 'utf8')); }
+    catch { return {}; }
 }
-async function saveApiKey(key) {
-    await fs.writeFile(CONFIG_FILE, JSON.stringify({ apiKey: key }, null, 2));
+
+async function saveConfig(cfg) {
+    await fs.writeFile(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+// Backward-compat: kalau config lama (hanya punya apiKey flat), migrate otomatis
+async function migrateOldConfig(cfg) {
+    if (cfg.apiKey && !cfg.provider) {
+        const migrated = {
+            provider: 'openrouter',
+            openrouter: { apiKey: cfg.apiKey },
+            huggingface: {}
+        };
+        await saveConfig(migrated);
+        return migrated;
+    }
+    return cfg;
+}
+
+// ─── HuggingFace URL Resolver ─────────────────────────────────────────────────
+// Menerima berbagai format:
+//   • https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2  → model page URL
+//   • mistralai/Mistral-7B-Instruct-v0.2                         → model ID
+//   • https://api-inference.huggingface.co/models/xxx             → inference API URL
+//   • https://xxx.endpoints.huggingface.cloud                     → custom endpoint
+//   • URL langsung berisi /v1/chat/completions                    → pakai as-is
+function resolveHFEndpoint(input) {
+    const s = input.trim().replace(/\/$/, '');
+
+    // Sudah endpoint lengkap
+    if (s.includes('/v1/chat/completions')) return s;
+
+    // URL halaman model HuggingFace
+    if (s.startsWith('https://huggingface.co/')) {
+        const modelId = s.replace('https://huggingface.co/', '').split('?')[0];
+        return `https://api-inference.huggingface.co/models/${modelId}/v1/chat/completions`;
+    }
+
+    // URL inference API resmi (tanpa /v1/chat/completions)
+    if (s.startsWith('https://api-inference.huggingface.co/models/')) {
+        return `${s}/v1/chat/completions`;
+    }
+
+    // Custom Inference Endpoint (*.endpoints.huggingface.cloud)
+    if (s.startsWith('https://') && s.includes('endpoints.huggingface.cloud')) {
+        return `${s}/v1/chat/completions`;
+    }
+
+    // URL https lain (endpoint custom apapun yang OpenAI-compatible)
+    if (s.startsWith('https://') || s.startsWith('http://')) {
+        return `${s}/v1/chat/completions`;
+    }
+
+    // Model ID mentah: "org/model-name"
+    if (s.includes('/')) {
+        return `https://api-inference.huggingface.co/models/${s}/v1/chat/completions`;
+    }
+
+    // Fallback: anggap model ID tanpa org
+    return `https://api-inference.huggingface.co/models/${s}/v1/chat/completions`;
+}
+
+// Ekstrak nama model yang readable dari endpoint URL
+function extractModelLabel(url) {
+    try {
+        const u = new URL(url);
+        // api-inference.huggingface.co/models/{org}/{model}/v1/chat/completions
+        const m = u.pathname.match(/\/models\/(.+?)\/v1\/chat\/completions/);
+        if (m) return m[1];
+        // endpoints.huggingface.cloud: pakai hostname
+        if (u.hostname.includes('endpoints.huggingface.cloud')) return u.hostname.split('.')[0];
+        return u.hostname;
+    } catch {
+        return url.slice(0, 40);
+    }
+}
+
+// ─── Provider Setup Wizard ────────────────────────────────────────────────────
+async function setupProvider() {
+    console.log(yellow('\n⚠️  No configuration found. Let\'s set up Coderly.\n'));
+
+    const { provider } = await inquirer.prompt([{
+        type:    'list',
+        name:    'provider',
+        message: 'Choose AI provider:',
+        choices: [
+            { name: `${orange('OpenRouter')}  ${gray('(gpt-4o, Claude, Gemini, dll via openrouter.ai)')}`, value: 'openrouter' },
+            { name: `${blue('HuggingFace')} ${gray('(model via URL, model ID, atau Inference Endpoint)')}`, value: 'huggingface' }
+        ]
+    }]);
+
+    const cfg = {
+        provider,
+        openrouter:  {},
+        huggingface: {}
+    };
+
+    if (provider === 'openrouter') {
+        const { key } = await inquirer.prompt([{ type: 'password', name: 'key', message: 'Enter OpenRouter API Key:', mask: '●' }]);
+        const { model } = await inquirer.prompt([{
+            type:    'input',
+            name:    'model',
+            message: 'Model name (default: gpt-oss-120b):',
+            default: 'gpt-oss-120b'
+        }]);
+        cfg.openrouter = { apiKey: key.trim(), model: model.trim() };
+    } else {
+        const { key } = await inquirer.prompt([{ type: 'password', name: 'key', message: 'Enter HuggingFace API Token (hf_...):', mask: '●' }]);
+        const { urlInput } = await inquirer.prompt([{
+            type:    'input',
+            name:    'urlInput',
+            message: 'Model URL / ID / Endpoint:\n  ' + gray('Contoh:') + '\n  ' +
+                     gray('  • https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2') + '\n  ' +
+                     gray('  • mistralai/Mistral-7B-Instruct-v0.2') + '\n  ' +
+                     gray('  • https://xxx.endpoints.huggingface.cloud') + '\n' +
+                     '❯ '
+        }]);
+        const endpoint = resolveHFEndpoint(urlInput.trim());
+        cfg.huggingface = { apiKey: key.trim(), endpoint, rawInput: urlInput.trim() };
+        console.log(green(`\n✔ Endpoint: ${gray(endpoint)}`));
+    }
+
+    await saveConfig(cfg);
+    console.log(green('✔ Konfigurasi tersimpan!\n'));
+    return cfg;
+}
+
+// ─── /config Wizard ───────────────────────────────────────────────────────────
+async function reconfigureProvider(cfg) {
+    const { action } = await inquirer.prompt([{
+        type:    'list',
+        name:    'action',
+        message: 'Apa yang ingin diubah?',
+        choices: [
+            { name: 'Ganti provider (OpenRouter ↔ HuggingFace)', value: 'switch' },
+            { name: 'Update API Key provider saat ini',           value: 'key' },
+            { name: 'Update model/URL HuggingFace',              value: 'url' },
+            { name: 'Update model OpenRouter',                    value: 'ormodel' },
+            { name: 'Lihat konfigurasi saat ini',                value: 'show' },
+            { name: 'Batal',                                      value: 'cancel' }
+        ]
+    }]);
+
+    if (action === 'cancel') return cfg;
+
+    if (action === 'show') {
+        const p = cfg.provider;
+        console.log(`\n  Provider : ${p === 'openrouter' ? orange('OpenRouter') : blue('HuggingFace')}`);
+        if (p === 'openrouter') {
+            console.log(`  API Key  : ${gray('●'.repeat(8) + (cfg.openrouter?.apiKey?.slice(-4) ?? '???'))}`);
+            console.log(`  Model    : ${orange(cfg.openrouter?.model ?? 'gpt-oss-120b')}`);
+        } else {
+            console.log(`  API Token: ${gray('●'.repeat(8) + (cfg.huggingface?.apiKey?.slice(-4) ?? '???'))}`);
+            console.log(`  Input    : ${blue(cfg.huggingface?.rawInput ?? '-')}`);
+            console.log(`  Endpoint : ${gray(cfg.huggingface?.endpoint ?? '-')}`);
+        }
+        console.log('');
+        return cfg;
+    }
+
+    if (action === 'switch') {
+        return setupProvider();
+    }
+
+    if (action === 'key') {
+        const { key } = await inquirer.prompt([{ type: 'password', name: 'key', message: `New API Key:`, mask: '●' }]);
+        if (cfg.provider === 'openrouter') cfg.openrouter.apiKey = key.trim();
+        else cfg.huggingface.apiKey = key.trim();
+        await saveConfig(cfg);
+        console.log(green('✔ API Key diupdate. Silakan restart.'));
+        return cfg;
+    }
+
+    if (action === 'url') {
+        if (cfg.provider !== 'huggingface') {
+            console.log(yellow('Provider saat ini bukan HuggingFace.'));
+            return cfg;
+        }
+        const { urlInput } = await inquirer.prompt([{ type: 'input', name: 'urlInput', message: 'Model URL / ID / Endpoint baru:' }]);
+        const endpoint = resolveHFEndpoint(urlInput.trim());
+        cfg.huggingface.endpoint  = endpoint;
+        cfg.huggingface.rawInput  = urlInput.trim();
+        await saveConfig(cfg);
+        console.log(green(`✔ Endpoint diupdate: ${gray(endpoint)}`));
+        return cfg;
+    }
+
+    if (action === 'ormodel') {
+        if (cfg.provider !== 'openrouter') {
+            console.log(yellow('Provider saat ini bukan OpenRouter.'));
+            return cfg;
+        }
+        const { model } = await inquirer.prompt([{ type: 'input', name: 'model', message: 'Model name baru:' }]);
+        cfg.openrouter.model = model.trim();
+        await saveConfig(cfg);
+        console.log(green(`✔ Model OpenRouter diupdate ke: ${orange(model.trim())}`));
+        return cfg;
+    }
+
+    return cfg;
+}
+
+// ─── Unified AI Caller ────────────────────────────────────────────────────────
+async function callAI(cfg, messages, tools) {
+    const provider = cfg.provider ?? 'openrouter';
+
+    // ── OpenRouter ──────────────────────────────────────────────────────────
+    if (provider === 'openrouter') {
+        const modelName = cfg.openrouter?.model ?? 'gpt-oss-120b';
+        const apiKey    = cfg.openrouter?.apiKey;
+        if (!apiKey) throw new Error('OpenRouter API Key tidak ditemukan. Jalankan /config.');
+
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method:  'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type':  'application/json',
+                'HTTP-Referer':  'https://github.com/coderly',
+                'X-Title':       'Coderly Terminal Agent'
+            },
+            body: JSON.stringify({ model: modelName, messages, tools })
+        });
+
+        if (!res.ok) throw new Error(`OpenRouter Error (${res.status}): ${await res.text()}`);
+        return await res.json();
+    }
+
+    // ── HuggingFace ─────────────────────────────────────────────────────────
+    if (provider === 'huggingface') {
+        const apiKey   = cfg.huggingface?.apiKey;
+        const endpoint = cfg.huggingface?.endpoint;
+        if (!apiKey)   throw new Error('HuggingFace API Token tidak ditemukan. Jalankan /config.');
+        if (!endpoint) throw new Error('HuggingFace endpoint tidak dikonfigurasi. Jalankan /config.');
+
+        const res = await fetch(endpoint, {
+            method:  'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type':  'application/json'
+            },
+            body: JSON.stringify({
+                model:      'tgi',   // required by HF Inference API
+                messages,
+                tools,
+                max_tokens: 4096,
+                stream:     false
+            })
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            // Model tidak support tool calling? Kasih pesan lebih jelas
+            if (res.status === 422 || errText.includes('tool')) {
+                throw new Error(
+                    `HuggingFace Error (${res.status}): Model mungkin tidak mendukung tool calling.\n` +
+                    `Coba model yang support function calling seperti mistralai/Mixtral-8x7B-Instruct-v0.1\n` +
+                    `Detail: ${errText.slice(0, 200)}`
+                );
+            }
+            throw new Error(`HuggingFace Error (${res.status}): ${errText.slice(0, 300)}`);
+        }
+
+        const data = await res.json();
+
+        // HF kadang return error dalam body dengan status 200
+        if (data.error) throw new Error(`HuggingFace: ${data.error}`);
+
+        return data;
+    }
+
+    throw new Error(`Provider tidak dikenal: ${provider}`);
+}
+
+// Helper: label provider & model untuk ditampilkan di header/prompt
+function getProviderLabel(cfg) {
+    if (cfg.provider === 'huggingface') {
+        const raw = cfg.huggingface?.rawInput ?? cfg.huggingface?.endpoint ?? 'HuggingFace';
+        return `${blue('HF')} ${gray('›')} ${blue(extractModelLabel(cfg.huggingface?.endpoint ?? raw))}`;
+    }
+    return `${orange('OR')} ${gray('›')} ${orange(cfg.openrouter?.model ?? 'gpt-oss-120b')}`;
 }
 
 // ─── Undo ─────────────────────────────────────────────────────────────────────
@@ -126,7 +404,7 @@ const tools = {
     listDir: async ({ dirPath = '.' }) => {
         const entries = await fs.readdir(path.resolve(dirPath), { withFileTypes: true });
         if (!entries.length) return '(empty directory)';
-        return entries.map(e => `${e.isDirectory() ? '[dir] ' : '[file]'} ${e.name}`).join('\n');
+        return entries.map(e => `${e.isDirectory() ? '[dir]' : '[file]'} ${e.name}`).join('\n');
     },
     editFile: async ({ filePath, oldContent, newContent }) => {
         await snapshotFile(filePath);
@@ -151,81 +429,100 @@ const tools = {
     }
 };
 
-// ─── Tool Declarations ────────────────────────────────────────────────────────
-const toolDeclarations = [{
-    functionDeclarations: [
-        {
+// ─── Tool Declarations (OpenAI/OpenRouter/HuggingFace compatible) ─────────────
+const openRouterTools = [
+    {
+        type: 'function',
+        function: {
             name: 'createFolder',
             description: 'Creates a new directory at the specified path.',
             parameters: {
-                type: 'OBJECT',
-                properties: { folderPath: { type: 'STRING', description: 'Relative or absolute folder path.' } },
+                type: 'object',
+                properties: { folderPath: { type: 'string', description: 'Relative or absolute folder path.' } },
                 required: ['folderPath']
             }
-        },
-        {
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'createFile',
             description: 'Creates a new file with the given content. Supports undo.',
             parameters: {
-                type: 'OBJECT',
+                type: 'object',
                 properties: {
-                    filePath: { type: 'STRING', description: 'Path of the file to create.' },
-                    content:  { type: 'STRING', description: 'Text or code content to write.' }
+                    filePath: { type: 'string', description: 'Path of the file to create.' },
+                    content:  { type: 'string', description: 'Text or code content to write.' }
                 },
                 required: ['filePath', 'content']
             }
-        },
-        {
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'readFile',
             description: 'Reads and returns the full content of an existing file. Always use this before editing.',
             parameters: {
-                type: 'OBJECT',
-                properties: { filePath: { type: 'STRING', description: 'Path to the file to read.' } },
+                type: 'object',
+                properties: { filePath: { type: 'string', description: 'Path to the file to read.' } },
                 required: ['filePath']
             }
-        },
-        {
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'listDir',
             description: 'Lists all files and subfolders in a directory. Use first to understand project structure.',
             parameters: {
-                type: 'OBJECT',
-                properties: { dirPath: { type: 'STRING', description: 'Directory to list. Defaults to "." (current directory).' } },
+                type: 'object',
+                properties: { dirPath: { type: 'string', description: 'Directory to list. Defaults to "." (current directory).' } },
                 required: []
             }
-        },
-        {
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'editFile',
             description: 'Makes a targeted edit to an existing file by replacing an exact string. Prefers over full rewrite. Supports undo.',
             parameters: {
-                type: 'OBJECT',
+                type: 'object',
                 properties: {
-                    filePath:   { type: 'STRING', description: 'Path to the file.' },
-                    oldContent: { type: 'STRING', description: 'The exact string to find. Must match perfectly.' },
-                    newContent: { type: 'STRING', description: 'The replacement string.' }
+                    filePath:   { type: 'string', description: 'Path to the file.' },
+                    oldContent: { type: 'string', description: 'The exact string to find. Must match perfectly.' },
+                    newContent: { type: 'string', description: 'The replacement string.' }
                 },
                 required: ['filePath', 'oldContent', 'newContent']
             }
-        },
-        {
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'deleteFile',
             description: 'Deletes a file permanently. Supports undo.',
             parameters: {
-                type: 'OBJECT',
-                properties: { filePath: { type: 'STRING', description: 'Path of the file to delete.' } },
+                type: 'object',
+                properties: { filePath: { type: 'string', description: 'Path of the file to delete.' } },
                 required: ['filePath']
             }
-        },
-        {
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'runCommand',
             description: 'Executes a shell command (npm install, node, git, etc.).',
             parameters: {
-                type: 'OBJECT',
-                properties: { command: { type: 'STRING', description: 'The shell command to execute.' } },
+                type: 'object',
+                properties: { command: { type: 'string', description: 'The shell command to execute.' } },
                 required: ['command']
             }
         }
-    ]
-}];
+    }
+];
 
 // ─── Display Helpers ──────────────────────────────────────────────────────────
 const ICONS = {
@@ -239,7 +536,6 @@ function printToolAction(name, args) {
     console.log(`  ${yellow((ICONS[name] ?? '⚙️') + ' ' + name)}${label ? gray(' › ' + label) : ''}`);
 }
 
-// Helper: detect package manager install commands
 const PKG_RE = /^\s*(npm|yarn|pnpm|bun)\s+(install|i|add|ci)\b/;
 function getInstallLabel(command = '') {
     const pkg = command.replace(/^\s*(npm|yarn|pnpm|bun)\s+(install|i|add|ci)\s*/, '').trim();
@@ -247,31 +543,39 @@ function getInstallLabel(command = '') {
 }
 
 // ─── Agentic Loop ─────────────────────────────────────────────────────────────
-async function runAgentLoop(ai, sysInstr, history, tokenTotal) {
+async function runAgentLoop(cfg, sysInstr, history, tokenTotal) {
     let step = 0, tokens = tokenTotal;
     const spinner = createSpinner();
 
     while (step < MAX_AGENT_STEPS) {
-        // ── AI call ──────────────────────────────────────────────────────────
         spinner.start('Thinking...');
-        const resp = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: history,
-            config: { systemInstruction: sysInstr, tools: toolDeclarations }
-        });
+
+        const messages = [{ role: 'system', content: sysInstr }, ...history];
+
+        let data;
+        try {
+            data = await callAI(cfg, messages, openRouterTools);
+        } catch (err) {
+            spinner.stop();
+            throw err;
+        }
+
         spinner.stop();
 
-        const usage = resp.usageMetadata;
-        tokens += usage?.totalTokenCount ?? usage?.total_token_count ?? 0;
+        const choice  = data.choices?.[0];
+        const message = choice?.message;
 
-        const calls = resp.functionCalls;
+        if (!message) throw new Error('Invalid response payload received from AI provider.');
 
-        // No function calls → final text reply, done
-        if (!calls?.length) {
-            const txt = resp.text ?? '';
+        tokens += data.usage?.total_tokens ?? 0;
+
+        const toolCalls = message.tool_calls;
+
+        if (!toolCalls || toolCalls.length === 0) {
+            const txt = message.content ?? '';
             if (txt) {
                 console.log(white(`\n${txt}`));
-                history.push({ role: 'model', parts: [{ text: txt }] });
+                history.push({ role: 'assistant', content: txt });
             }
             break;
         }
@@ -279,22 +583,20 @@ async function runAgentLoop(ai, sysInstr, history, tokenTotal) {
         step++;
         console.log(orange(`\n── Step ${step} ${'─'.repeat(50 - String(step).length)}`));
 
-        history.push({
-            role: 'model',
-            parts: calls.map(c => ({ functionCall: { name: c.name, args: c.args } }))
-        });
+        history.push(message);
 
         // ── Execute tools ─────────────────────────────────────────────────────
-        const responses = [];
-        for (const { name, args } of calls) {
+        for (const call of toolCalls) {
+            const name = call.function.name;
+            let args = {};
+            try { args = JSON.parse(call.function.arguments); } catch { args = {}; }
+
             printToolAction(name, args);
 
-            // Spinner for commands (special label for package installs)
             if (name === 'runCommand') {
                 const cmd = args.command ?? '';
-                if (PKG_RE.test(cmd)) {
-                    spinner.start(`Installing ${getInstallLabel(cmd)}...`);
-                } else {
+                if (PKG_RE.test(cmd)) spinner.start(`Installing ${getInstallLabel(cmd)}...`);
+                else {
                     const short = cmd.length > 45 ? cmd.slice(0, 42) + '...' : cmd;
                     spinner.start(`Running › ${short}`);
                 }
@@ -305,12 +607,11 @@ async function runAgentLoop(ai, sysInstr, history, tokenTotal) {
                 result = await tools[name](args);
                 if (name === 'runCommand') spinner.stop();
 
-                if (name === 'readFile') {
+                if (name === 'readFile')
                     console.log(green(`     ✔ Read ${args.filePath} (${result.length} chars)`));
-                } else if (name === 'listDir') {
+                else if (name === 'listDir')
                     console.log(green(`     ✔ Listed ${result.split('\n').length} entries`));
-                } else {
-                    // trim long output for display
+                else {
                     const display = result.length > 120 ? result.slice(0, 117) + '...' : result;
                     console.log(green(`     ✔ ${display}`));
                 }
@@ -319,15 +620,17 @@ async function runAgentLoop(ai, sysInstr, history, tokenTotal) {
                 console.log(red(`     ✖ ${result}`));
             }
 
-            responses.push({ functionResponse: { name, response: { result } } });
+            history.push({
+                role:         'tool',
+                tool_call_id: call.id,
+                name:         name,
+                content:      result
+            });
         }
-
-        history.push({ role: 'user', parts: responses });
     }
 
-    if (step >= MAX_AGENT_STEPS) {
+    if (step >= MAX_AGENT_STEPS)
         console.log(yellow(`\n⚠️  Reached max agent steps (${MAX_AGENT_STEPS}). Stopping.`));
-    }
 
     return tokens;
 }
@@ -338,36 +641,33 @@ async function main() {
     const username = os.userInfo().username;
     const cwd      = process.cwd();
 
-    // ── Header box (with ASCII character) ────────────────────────────────────
     console.log(orange('┌──────────────────────────────────────────────────────────┐'));
-    console.log(`${orange('│')}  ${orange('▐▛███▜▌')}  ${orangeBold('●  Coderly')}                         ${gray('v2.0.0')}      ${orange('│')}`);
+    console.log(`${orange('│')}  ${orange('▐▛███▜▌')}  ${orangeBold('●  Coderly')}                          ${gray('v2.1.0')}      ${orange('│')}`);
     console.log(`${orange('│')}  ${orange('▜█████▛▘')} ${gray('Autonomous Terminal AI Agent for Coding')}        ${orange('│')}`);
-    console.log(`${orange('│')}   ${orange('▘▘ ▝▝')}                                                  ${orange('│')}`);
+    console.log(`${orange('│')}   ${orange('▘▘ ▝▝')}  ${gray('Providers: OpenRouter · HuggingFace')}             ${orange('│')}`);
     console.log(orange('└──────────────────────────────────────────────────────────┘'));
 
-    console.log(`\nHello, ${cyan(username)}  ·  ${gray('gemini-2.5-flash')}`);
+    // ── Load / migrate config ──────────────────────────────────────────────────
+    let cfg = await getConfig();
+    cfg = await migrateOldConfig(cfg);
+
+    // Belum punya config sama sekali → setup wizard
+    const needsSetup = !cfg.provider || (
+        cfg.provider === 'openrouter'  && !cfg.openrouter?.apiKey  ||
+        cfg.provider === 'huggingface' && (!cfg.huggingface?.apiKey || !cfg.huggingface?.endpoint)
+    );
+    if (needsSetup) cfg = await setupProvider();
+
+    console.log(`\nHello, ${cyan(username)}  ·  ${getProviderLabel(cfg)}`);
     console.log(`${gray('Type your request  ·  ')}${orange('/help')}${gray(' for commands  ·  Ctrl+C to exit')}`);
     console.log(`${gray('Running in')}  ${cyan(cwd)}`);
     console.log(gray('................................................................\n'));
 
-    // ── API key setup ─────────────────────────────────────────────────────────
-    let apiKey = await getApiKey();
-    if (!apiKey) {
-        console.log(yellow('⚠️  No API key found.'));
-        const { key } = await inquirer.prompt([{ type: 'input', name: 'key', message: 'Enter your Gemini API Key:' }]);
-        apiKey = key.trim();
-        await saveApiKey(apiKey);
-        console.log(green('✔ API Key saved!\n'));
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
-
-    // ── Baca Instruksi dari skill.md ──────────────────────────────────────────
+    // ── System Prompt (skill.md) ───────────────────────────────────────────────
     let sysInstr = '';
     try {
-        const skillPath = path.join(process.cwd(), 'skills/skill.md');
-        sysInstr = await fs.readFile(skillPath, 'utf8');
-    } catch (err) {
+        sysInstr = await fs.readFile(path.join(cwd, 'skills/skill.md'), 'utf8');
+    } catch {
         console.log(yellow('⚠️  File skill.md tidak ditemukan. Menggunakan instruksi bawaan.'));
         sysInstr = `You are Coderly, an autonomous terminal AI coding agent.
 
@@ -382,11 +682,9 @@ BEHAVIOR RULES:
 6. Keep final text summaries concise — list what was done, not what you plan to do`;
     }
 
-    // ── Chat page state ───────────────────────────────────────────────────────
     let currentPage = 'main';
     getPage('main');
 
-    // ── REPL ─────────────────────────────────────────────────────────────────
     while (true) {
         const page = getPage(currentPage);
 
@@ -405,24 +703,30 @@ BEHAVIOR RULES:
         if (!trimmed) continue;
         const lower = trimmed.toLowerCase();
 
-        // ── Built-in commands ─────────────────────────────────────────────────
+        // ── Commands ──────────────────────────────────────────────────────────
         if (lower === '/help') {
             console.log(`
 ${orangeBold('Commands:')}
-  ${orange('/help')}               ${gray('Show this help')}
-  ${orange('/clear')}              ${gray('Reset current chat history & tokens')}
-  ${orange('/undo')}               ${gray('Undo the last file operation')}
-  ${orange('/tokens')}             ${gray('Show token usage for current chat')}
-  ${orange('/save [name]')}        ${gray('Save current chat history to disk')}
-  ${orange('/load <name>')}        ${gray('Load a session from disk into current chat')}
-  ${orange('/sessions')}           ${gray('List saved sessions on disk')}
-  ${orange('/config')}             ${gray('Update Gemini API key')}
+  ${orange('/help')}                ${gray('Show this help')}
+  ${orange('/clear')}               ${gray('Reset current chat history & tokens')}
+  ${orange('/undo')}                ${gray('Undo the last file operation')}
+  ${orange('/tokens')}              ${gray('Show token usage for current chat')}
+  ${orange('/save [name]')}         ${gray('Save current chat history to disk')}
+  ${orange('/load <name>')}         ${gray('Load a session from disk into current chat')}
+  ${orange('/sessions')}            ${gray('List saved sessions on disk')}
+  ${orange('/config')}              ${gray('Update provider, API key, atau model/URL')}
+  ${orange('/provider')}            ${gray('Tampilkan provider & model aktif')}
 
 ${orangeBold('Chat Pages:')}
-  ${orange('/chats')}              ${gray('List all open chat pages')}
-  ${orange('/newchat [name]')}     ${gray('Create a new chat page and switch to it')}
-  ${orange('/chat <name>')}        ${gray('Switch to an existing chat page')}
-  ${orange('/closechat')}          ${gray('Close current page and return to main')}
+  ${orange('/chats')}               ${gray('List all open chat pages')}
+  ${orange('/newchat [name]')}      ${gray('Create a new chat page and switch to it')}
+  ${orange('/chat <name>')}         ${gray('Switch to an existing chat page')}
+  ${orange('/closechat')}           ${gray('Close current page and return to main')}
+
+${orangeBold('HuggingFace URL formats:')}
+  ${blue('https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2')}
+  ${blue('mistralai/Mistral-7B-Instruct-v0.2')}
+  ${blue('https://xxx.endpoints.huggingface.cloud')}
 
   ${orange('exit / quit')}         ${gray('Exit Coderly')}
 `);
@@ -452,7 +756,7 @@ ${orangeBold('Chat Pages:')}
 
         if (lower === '/sessions') {
             const ss = await listSessions();
-            if (!ss.length) { console.log(gray('No saved sessions.')); }
+            if (!ss.length) console.log(gray('No saved sessions.'));
             else { console.log(gray('Saved sessions:')); ss.forEach(s => console.log(`  ${orange('·')} ${s}`)); }
             continue;
         }
@@ -467,7 +771,7 @@ ${orangeBold('Chat Pages:')}
             const name = trimmed.slice(5).trim();
             if (!name) {
                 const ss = await listSessions();
-                if (!ss.length) { console.log(gray('No saved sessions. Use /save [name] first.')); }
+                if (!ss.length) console.log(gray('No saved sessions. Use /save [name] first.'));
                 else { ss.forEach(s => console.log(`  ${orange('·')} ${s}`)); console.log(gray('Usage: /load <name>')); }
                 continue;
             }
@@ -480,17 +784,20 @@ ${orangeBold('Chat Pages:')}
         }
 
         if (lower === '/config' || lower === 'set key') {
-            const { key } = await inquirer.prompt([{ type: 'input', name: 'key', message: 'Enter new Gemini API Key:' }]);
-            await saveApiKey(key.trim());
-            console.log(green('✔ API Key updated. Please restart.'));
-            break;
-        }
-
-        // ── Chat page commands ─────────────────────────────────────────────────
-        if (lower === '/chats') {
-            printPages(currentPage);
+            cfg = await reconfigureProvider(cfg);
             continue;
         }
+
+        if (lower === '/provider') {
+            console.log(`\n  Provider aktif: ${getProviderLabel(cfg)}\n`);
+            if (cfg.provider === 'huggingface') {
+                console.log(`  Endpoint : ${gray(cfg.huggingface?.endpoint ?? '-')}`);
+            }
+            console.log('');
+            continue;
+        }
+
+        if (lower === '/chats') { printPages(currentPage); continue; }
 
         if (lower === '/newchat' || lower.startsWith('/newchat ')) {
             const name = trimmed.slice(8).trim() || `chat-${pages.size + 1}`;
@@ -520,9 +827,9 @@ ${orangeBold('Chat Pages:')}
         }
 
         // ── Agent ─────────────────────────────────────────────────────────────
-        page.history.push({ role: 'user', parts: [{ text: trimmed }] });
+        page.history.push({ role: 'user', content: trimmed });
         try {
-            page.tokenTotal = await runAgentLoop(ai, sysInstr, page.history, page.tokenTotal);
+            page.tokenTotal = await runAgentLoop(cfg, sysInstr, page.history, page.tokenTotal);
         } catch (err) {
             page.history.pop();
             console.error(red(`\n✖ Error: ${err.message}\n`));
