@@ -1,1 +1,1194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coderly — Web Interface</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+<style>
+:root {
+  --bg: #08080a;
+  --sidebar: #0c0c10;
+  --card: #12121a;
+  --card-hover: #18182a;
+  --border: #1c1c2a;
+  --accent: #FF6F00;
+  --accent-dim: rgba(255,111,0,0.12);
+  --accent-glow: rgba(255,111,0,0.25);
+  --text: #e8e8ec;
+  --muted: #6b7280;
+  --blue: #38BDF8;
+  --green: #22c55e;
+  --red: #ef4444;
+  --yellow: #eab308;
+  --lime: #A3E635;
+  --radius: 10px;
+  --font-ui: 'Space Grotesk', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:var(--font-ui);font-size:14px;
+  display:flex;
+}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
 
+/* ── Sidebar ─────────────────────────────── */
+#sidebar{
+  width:260px;min-width:260px;
+  background:var(--sidebar);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  transition:transform .3s ease;
+  z-index:10;
+}
+#sidebar.collapsed{transform:translateX(-260px);min-width:0;width:0;border:none}
+.sidebar-logo{
+  padding:20px 18px 16px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:10px;
+}
+.sidebar-logo .logo-icon{
+  width:36px;height:36px;border-radius:8px;
+  background:linear-gradient(135deg,var(--accent),#FF9800);
+  display:flex;align-items:center;justify-content:center;
+  font-weight:700;font-size:16px;color:#fff;
+  font-family:var(--font-mono);
+}
+.sidebar-logo .logo-text{font-weight:700;font-size:17px;letter-spacing:-.3px}
+.sidebar-logo .logo-ver{color:var(--muted);font-size:11px;margin-left:auto;font-family:var(--font-mono)}
+
+.sidebar-section{padding:14px 14px 6px}
+.sidebar-section-title{
+  font-size:10px;text-transform:uppercase;letter-spacing:1.2px;
+  color:var(--muted);margin-bottom:8px;font-weight:600;
+}
+
+.chat-page-item{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 10px;border-radius:6px;cursor:pointer;
+  transition:background .15s;font-size:13px;
+  margin-bottom:2px;position:relative;
+}
+.chat-page-item:hover{background:var(--card)}
+.chat-page-item.active{background:var(--accent-dim);color:var(--accent)}
+.chat-page-item .page-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-page-item .page-msgs{color:var(--muted);font-size:11px;font-family:var(--font-mono)}
+.chat-page-item .page-close{
+  opacity:0;color:var(--muted);cursor:pointer;font-size:11px;
+  transition:opacity .15s;padding:2px 4px;
+}
+.chat-page-item:hover .page-close{opacity:1}
+.chat-page-item .page-close:hover{color:var(--red)}
+
+.sidebar-btn{
+  display:flex;align-items:center;gap:8px;
+  padding:8px 10px;border-radius:6px;cursor:pointer;
+  transition:all .15s;font-size:13px;color:var(--muted);
+  border:none;background:none;width:100%;text-align:left;
+  font-family:var(--font-ui);
+}
+.sidebar-btn:hover{background:var(--card);color:var(--text)}
+.sidebar-btn i{width:16px;text-align:center;font-size:12px}
+
+.provider-badge{
+  margin:8px 14px;padding:10px 12px;
+  background:var(--card);border-radius:8px;
+  border:1px solid var(--border);font-size:12px;
+}
+.provider-badge .pv-label{font-weight:600;margin-bottom:4px}
+.provider-badge .pv-detail{color:var(--muted);font-family:var(--font-mono);font-size:11px;word-break:break-all}
+
+.sidebar-spacer{flex:1}
+.sidebar-footer{
+  padding:12px 14px;border-top:1px solid var(--border);
+  display:flex;gap:6px;
+}
+.sidebar-footer button{
+  flex:1;padding:7px;border-radius:6px;cursor:pointer;
+  background:var(--card);border:1px solid var(--border);
+  color:var(--text);font-family:var(--font-ui);font-size:12px;
+  transition:all .15s;display:flex;align-items:center;justify-content:center;gap:6px;
+}
+.sidebar-footer button:hover{background:var(--card-hover);border-color:var(--accent)}
+
+/* ── Main ────────────────────────────────── */
+#main{
+  flex:1;display:flex;flex-direction:column;min-width:0;
+  position:relative;
+}
+
+#chat-header{
+  padding:14px 20px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:12px;
+  background:rgba(8,8,10,.85);backdrop-filter:blur(12px);
+  position:relative;z-index:5;
+}
+#chat-header .toggle-sidebar{
+  background:none;border:none;color:var(--muted);cursor:pointer;
+  font-size:16px;padding:4px;transition:color .15s;
+}
+#chat-header .toggle-sidebar:hover{color:var(--text)}
+#chat-header .page-title{font-weight:600;font-size:15px;flex:1}
+#chat-header .token-count{
+  font-family:var(--font-mono);font-size:11px;color:var(--muted);
+  background:var(--card);padding:4px 10px;border-radius:20px;
+  border:1px solid var(--border);
+}
+#chat-header .header-actions{display:flex;gap:4px}
+#chat-header .header-actions button{
+  background:none;border:none;color:var(--muted);cursor:pointer;
+  font-size:14px;padding:6px 8px;border-radius:6px;transition:all .15s;
+}
+#chat-header .header-actions button:hover{background:var(--card);color:var(--text)}
+
+/* ── Messages ────────────────────────────── */
+#messages{
+  flex:1;overflow-y:auto;padding:20px;
+  display:flex;flex-direction:column;gap:16px;
+}
+
+.msg{display:flex;gap:10px;max-width:820px;animation:msgIn .3s ease}
+.msg.user{align-self:flex-end;flex-direction:row-reverse}
+.msg.assistant{align-self:flex-start}
+
+@keyframes msgIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+.msg-avatar{
+  width:30px;height:30px;border-radius:8px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:600;font-family:var(--font-mono);
+}
+.msg.user .msg-avatar{background:var(--accent);color:#fff}
+.msg.assistant .msg-avatar{background:var(--card);border:1px solid var(--border);color:var(--accent)}
+
+.msg-bubble{
+  padding:10px 14px;border-radius:12px;font-size:13.5px;line-height:1.6;
+  max-width:680px;word-break:break-word;
+}
+.msg.user .msg-bubble{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+.msg.assistant .msg-bubble{background:var(--card);border:1px solid var(--border);border-bottom-left-radius:4px}
+.msg-bubble code{
+  font-family:var(--font-mono);font-size:12px;
+  background:rgba(255,255,255,.08);padding:2px 6px;border-radius:4px;
+}
+.msg.user .msg-bubble code{background:rgba(0,0,0,.2)}
+.msg-bubble pre{
+  background:#0a0a0f;border:1px solid var(--border);border-radius:6px;
+  padding:12px;margin:8px 0;overflow-x:auto;font-size:12px;
+  font-family:var(--font-mono);line-height:1.5;
+}
+.msg-bubble pre code{background:none;padding:0}
+
+/* Tool call card */
+.tool-card{
+  background:var(--card);border:1px solid var(--border);border-radius:8px;
+  margin:6px 0;overflow:hidden;font-size:12px;
+  animation:msgIn .3s ease;
+}
+.tool-card-header{
+  display:flex;align-items:center;gap:8px;
+  padding:8px 12px;background:rgba(255,111,0,.06);
+  border-bottom:1px solid var(--border);cursor:pointer;
+  transition:background .15s;
+}
+.tool-card-header:hover{background:rgba(255,111,0,.1)}
+.tool-card-header .tool-icon{font-size:14px}
+.tool-card-header .tool-name{font-weight:600;color:var(--accent);font-family:var(--font-mono)}
+.tool-card-header .tool-target{color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono)}
+.tool-card-header .tool-status{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:500}
+.tool-card-header .tool-status.running{background:var(--accent-dim);color:var(--accent)}
+.tool-card-header .tool-status.done{background:rgba(34,197,94,.12);color:var(--green)}
+.tool-card-header .tool-status.error{background:rgba(239,68,68,.12);color:var(--red)}
+.tool-card-header .chevron{color:var(--muted);font-size:10px;transition:transform .2s}
+.tool-card.open .tool-card-header .chevron{transform:rotate(180deg)}
+.tool-card-body{
+  max-height:0;overflow:hidden;transition:max-height .3s ease;
+}
+.tool-card.open .tool-card-body{max-height:500px;overflow-y:auto}
+.tool-card-body pre{
+  margin:0;padding:10px 12px;font-size:11.5px;
+  font-family:var(--font-mono);line-height:1.5;color:var(--muted);
+  white-space:pre-wrap;word-break:break-all;
+}
+
+/* Step indicator */
+.step-indicator{
+  display:flex;align-items:center;gap:8px;
+  padding:4px 0;font-size:12px;color:var(--muted);
+  animation:msgIn .3s ease;
+}
+.step-indicator .step-line{flex:1;height:1px;background:var(--border)}
+.step-indicator .step-num{color:var(--accent);font-weight:600;font-family:var(--font-mono)}
+
+/* Status bar */
+.status-bar{
+  display:flex;align-items:center;gap:8px;
+  padding:6px 14px;font-size:12px;color:var(--muted);
+  font-family:var(--font-mono);
+}
+.status-bar .dot{
+  width:7px;height:7px;border-radius:50%;
+  animation:pulse 1.5s ease-in-out infinite;
+}
+.status-bar .dot.orange{background:var(--accent)}
+.status-bar .dot.green{background:var(--green)}
+.status-bar .dot.red{background:var(--red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── Input ───────────────────────────────── */
+#input-area{
+  padding:12px 20px 16px;
+  border-top:1px solid var(--border);
+  background:rgba(8,8,10,.9);backdrop-filter:blur(12px);
+}
+#input-wrapper{
+  display:flex;align-items:flex-end;gap:8px;
+  background:var(--card);border:1px solid var(--border);
+  border-radius:12px;padding:8px 12px;
+  transition:border-color .2s;
+}
+#input-wrapper:focus-within{border-color:var(--accent)}
+#msg-input{
+  flex:1;background:none;border:none;color:var(--text);
+  font-family:var(--font-ui);font-size:14px;
+  resize:none;outline:none;min-height:22px;max-height:150px;
+  line-height:1.5;
+}
+#msg-input::placeholder{color:var(--muted)}
+#send-btn{
+  background:var(--accent);border:none;color:#fff;
+  width:34px;height:34px;border-radius:8px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;transition:all .15s;flex-shrink:0;
+}
+#send-btn:hover{background:#e56200;transform:scale(1.05)}
+#send-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+#send-btn.is-loading{background:var(--red);animation:pulse 1s ease-in-out infinite}
+
+.input-hint{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:4px 4px 0;font-size:11px;color:var(--muted);
+}
+.input-hint kbd{
+  background:var(--card);border:1px solid var(--border);
+  padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:10px;
+}
+
+/* ── Welcome ─────────────────────────────── */
+.welcome{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  flex:1;text-align:center;padding:40px;gap:16px;
+}
+.welcome .w-logo{
+  width:64px;height:64px;border-radius:16px;
+  background:linear-gradient(135deg,var(--accent),#FF9800);
+  display:flex;align-items:center;justify-content:center;
+  font-size:28px;font-weight:700;color:#fff;font-family:var(--font-mono);
+  box-shadow:0 0 40px var(--accent-glow);
+}
+.welcome h2{font-size:22px;font-weight:700;letter-spacing:-.3px}
+.welcome p{color:var(--muted);max-width:400px;line-height:1.6}
+.welcome .quick-actions{
+  display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;justify-content:center;
+}
+.welcome .quick-action{
+  background:var(--card);border:1px solid var(--border);
+  padding:8px 16px;border-radius:8px;cursor:pointer;
+  font-size:13px;transition:all .15s;font-family:var(--font-ui);
+  color:var(--text);
+}
+.welcome .quick-action:hover{border-color:var(--accent);background:var(--accent-dim)}
+
+/* ── Config Modal ────────────────────────── */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.6);
+  display:flex;align-items:center;justify-content:center;
+  z-index:100;animation:fadeIn .2s ease;
+}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.modal{
+  background:var(--sidebar);border:1px solid var(--border);
+  border-radius:14px;width:480px;max-height:80vh;overflow-y:auto;
+  animation:slideUp .25s ease;
+}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.modal-header{
+  padding:18px 20px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+  font-weight:600;font-size:16px;
+}
+.modal-header button{
+  background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;
+}
+.modal-body{padding:20px}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:500}
+.form-group input,.form-group select{
+  width:100%;padding:9px 12px;border-radius:8px;
+  background:var(--card);border:1px solid var(--border);
+  color:var(--text);font-family:var(--font-ui);font-size:13px;
+  outline:none;transition:border-color .15s;
+}
+.form-group input:focus,.form-group select:focus{border-color:var(--accent)}
+.form-group select{cursor:pointer}
+.form-group select option{background:var(--card)}
+.btn-primary{
+  width:100%;padding:10px;border-radius:8px;border:none;
+  background:var(--accent);color:#fff;font-weight:600;
+  font-family:var(--font-ui);font-size:14px;cursor:pointer;
+  transition:background .15s;
+}
+.btn-primary:hover{background:#e56200}
+
+/* ── Connection status ───────────────────── */
+.connection-lost{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  text-align:center;z-index:50;
+}
+.connection-lost i{font-size:48px;color:var(--red);margin-bottom:16px}
+.connection-lost h3{font-size:18px;margin-bottom:8px}
+.connection-lost p{color:var(--muted);margin-bottom:16px}
+.connection-lost button{
+  padding:8px 20px;border-radius:8px;border:none;
+  background:var(--accent);color:#fff;cursor:pointer;
+  font-family:var(--font-ui);font-weight:600;
+}
+
+/* ── Responsive ──────────────────────────── */
+@media(max-width:768px){
+  #sidebar{position:fixed;left:0;top:0;bottom:0;z-index:20;transform:translateX(-260px)}
+  #sidebar.open{transform:translateX(0)}
+  .sidebar-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:15;display:none}
+  .sidebar-overlay.show{display:block}
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">C</div>
+    <span class="logo-text">Coderly</span>
+    <span class="logo-ver">v2.2</span>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Chat Pages</div>
+    <div id="page-list"></div>
+    <button class="sidebar-btn" onclick="newChatPage()">
+      <i class="fas fa-plus"></i> New Chat
+    </button>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Sessions</div>
+    <button class="sidebar-btn" onclick="saveCurrentSession()">
+      <i class="fas fa-save"></i> Save Session
+    </button>
+    <button class="sidebar-btn" onclick="loadSessionList()">
+      <i class="fas fa-folder-open"></i> Load Session
+    </button>
+  </div>
+
+  <div id="provider-badge" class="provider-badge">
+    <div class="pv-label">Provider</div>
+    <div class="pv-detail" id="pv-detail">Loading...</div>
+  </div>
+
+  <div class="sidebar-spacer"></div>
+
+  <div class="sidebar-footer">
+    <button onclick="openConfigModal()"><i class="fas fa-cog"></i> Config</button>
+    <button onclick="showHelp()"><i class="fas fa-question-circle"></i> Help</button>
+  </div>
+</aside>
+
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+<!-- Main Area -->
+<main id="main">
+  <header id="chat-header">
+    <button class="toggle-sidebar" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
+    <span class="page-title" id="page-title">main</span>
+    <span class="token-count" id="token-count">0 tokens</span>
+    <div class="header-actions">
+      <button onclick="clearChat()" title="Clear chat"><i class="fas fa-eraser"></i></button>
+      <button onclick="undoLast()" title="Undo last file op"><i class="fas fa-undo"></i></button>
+    </div>
+  </header>
+
+  <div id="messages"></div>
+
+  <div id="input-area">
+    <div id="input-wrapper">
+      <textarea id="msg-input" rows="1" placeholder="Ask Coderly anything..." 
+        onkeydown="handleInputKey(event)" oninput="autoResize(this)"></textarea>
+      <button id="send-btn" onclick="sendMessage()"><i class="fas fa-arrow-up"></i></button>
+    </div>
+    <div class="input-hint">
+      <span><kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line</span>
+      <span id="connection-status"><span class="dot green" style="display:inline-block;vertical-align:middle"></span> Connected</span>
+    </div>
+  </div>
+</main>
+
+<!-- Config Modal -->
+<div id="config-modal" class="modal-overlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <span>Configuration</span>
+      <button onclick="closeConfigModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Provider</label>
+        <select id="cfg-provider" onchange="onProviderChange()">
+          <option value="openrouter">OpenRouter</option>
+          <option value="huggingface">HuggingFace</option>
+          <option value="local">Local Server</option>
+        </select>
+      </div>
+      <div id="cfg-openrouter">
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="cfg-or-key" placeholder="sk-or-...">
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <input type="text" id="cfg-or-model" placeholder="gpt-oss-120b">
+        </div>
+      </div>
+      <div id="cfg-huggingface" style="display:none">
+        <div class="form-group">
+          <label>API Token</label>
+          <input type="password" id="cfg-hf-key" placeholder="hf_...">
+        </div>
+        <div class="form-group">
+          <label>Model URL / ID / Endpoint</label>
+          <input type="text" id="cfg-hf-url" placeholder="mistralai/Mistral-7B-Instruct-v0.2">
+        </div>
+      </div>
+      <div id="cfg-local" style="display:none">
+        <div class="form-group">
+          <label>Server URL</label>
+          <input type="text" id="cfg-local-url" placeholder="http://localhost:11434">
+        </div>
+        <div class="form-group">
+          <label>Model Name (optional)</label>
+          <input type="text" id="cfg-local-model" placeholder="llama3">
+        </div>
+        <div class="form-group">
+          <label>API Key (optional)</label>
+          <input type="password" id="cfg-local-key" placeholder="Usually empty">
+        </div>
+      </div>
+      <button class="btn-primary" onclick="saveConfigFromModal()">Save Configuration</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+//  State
+// ═══════════════════════════════════════════════════════════
+const API_BASE = window.location.origin;
+let chatPages = new Map();
+let currentPage = 'main';
+let isProcessing = false;
+let serverConnected = false;
+
+// Inisialisasi halaman utama
+chatPages.set('main', { history: [], tokens: 0 });
+
+// ═══════════════════════════════════════════════════════════
+//  API Helper
+// ═══════════════════════════════════════════════════════════
+async function api(path, opts = {}) {
+  try {
+    const res = await fetch(API_BASE + path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err);
+    }
+    return await res.json();
+  } catch (e) {
+    updateConnectionStatus(false);
+    throw e;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SSE Chat — streaming real-time dari server
+// ═══════════════════════════════════════════════════════════
+async function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const text = input.value.trim();
+  if (!text || isProcessing) return;
+
+  const page = chatPages.get(currentPage);
+  if (!page) return;
+
+  // Cek apakah ini command
+  const lower = text.toLowerCase();
+  if (lower.startsWith('/')) {
+    handleCommand(text);
+    input.value = '';
+    autoResize(input);
+    return;
+  }
+
+  // Tambah pesan user ke UI
+  addMessageToUI('user', text);
+  page.history.push({ role: 'user', content: text });
+  input.value = '';
+  autoResize(input);
+
+  // Mulai processing
+  isProcessing = true;
+  updateSendButton(true);
+  showStatus('Thinking...', 'orange');
+
+  try {
+    const res = await fetch(API_BASE + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: text,
+        history: page.history,
+        pageName: currentPage
+      })
+    });
+
+    if (!res.ok) throw new Error(await res.text());
+
+    // Baca SSE stream
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = '';
+    let assistantContent = '';
+    let assistantEl = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          let data;
+          try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+          switch (currentEvent) {
+            case 'status':
+              showStatus(data.text, 'orange');
+              break;
+
+            case 'step':
+              addStepIndicator(data.step, data.total);
+              showStatus(`Step ${data.step} — executing tools...`, 'orange');
+              break;
+
+            case 'tool_call':
+              addToolCard(data.name, data.args, data.step);
+              showStatus(`Running ${data.name}...`, 'orange');
+              break;
+
+            case 'tool_result':
+              updateToolCard(data.name, data.result, data.error);
+              break;
+
+            case 'assistant':
+              if (!assistantEl) {
+                assistantEl = addMessageToUI('assistant', '', true);
+              }
+              assistantContent += data.content;
+              updateAssistantMessage(assistantEl, assistantContent);
+              // Juga push ke history secara incremental
+              break;
+
+            case 'warning':
+              addSystemMessage(data.message, 'warning');
+              break;
+
+            case 'error':
+              addSystemMessage(data.message, 'error');
+              page.history.pop(); // Hapus pesan user terakhir
+              break;
+
+            case 'done':
+              // Finalisasi — sinkronkan history dari server
+              if (data.history) {
+                page.history.length = 0;
+                page.history.push(...data.history);
+              }
+              page.tokens = data.tokens || 0;
+              updateTokenCount();
+              break;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    addSystemMessage('Connection error: ' + err.message, 'error');
+    page.history.pop();
+  }
+
+  isProcessing = false;
+  updateSendButton(false);
+  hideStatus();
+  updateConnectionStatus(true);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Command Handler
+// ═══════════════════════════════════════════════════════════
+function handleCommand(text) {
+  const lower = text.toLowerCase();
+  const parts = text.split(/\s+/);
+  const cmd = parts[0].toLowerCase();
+
+  switch (cmd) {
+    case '/help':
+      showHelp();
+      break;
+    case '/clear':
+      clearChat();
+      break;
+    case '/undo':
+      undoLast();
+      break;
+    case '/tokens':
+      const pg = chatPages.get(currentPage);
+      addSystemMessage(`"${currentPage}" — ${pg.tokens.toLocaleString()} tokens used`, 'info');
+      break;
+    case '/newchat':
+      newChatPage(parts[1]);
+      break;
+    case '/chat':
+      if (parts[1]) switchPage(parts[1]);
+      break;
+    case '/closechat':
+      closeCurrentPage();
+      break;
+    case '/chats':
+      printPages();
+      break;
+    case '/config':
+      openConfigModal();
+      break;
+    case '/provider':
+      fetchProviderInfo();
+      break;
+    case '/save':
+      saveCurrentSession(parts.slice(1).join(' ') || '');
+      break;
+    case '/sessions':
+      loadSessionList();
+      break;
+    case '/testlocal':
+      testLocalConnection();
+      break;
+    case '/exit':
+    case '/quit':
+      addSystemMessage('Close the browser tab to exit Coderly Web.', 'info');
+      break;
+    default:
+      addSystemMessage(`Unknown command: ${cmd}. Type /help for available commands.`, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  UI Rendering
+// ═══════════════════════════════════════════════════════════
+function addMessageToUI(role, content, returnEl = false) {
+  const container = document.getElementById('messages');
+  hideWelcome();
+
+  const msg = document.createElement('div');
+  msg.className = `msg ${role}`;
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = role === 'user' ? 'U' : 'C';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.innerHTML = formatContent(content);
+
+  msg.appendChild(avatar);
+  msg.appendChild(bubble);
+  container.appendChild(msg);
+  scrollToBottom();
+
+  if (returnEl) return bubble;
+}
+
+function updateAssistantMessage(bubble, content) {
+  if (bubble) {
+    bubble.innerHTML = formatContent(content);
+    scrollToBottom();
+  }
+}
+
+function formatContent(text) {
+  if (!text) return '';
+  // Escape HTML
+  let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Code blocks
+  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre><code>${code.trim()}</code></pre>`);
+  // Inline code
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Line breaks
+  s = s.replace(/\n/g, '<br>');
+  return s;
+}
+
+function addStepIndicator(step, total) {
+  const container = document.getElementById('messages');
+  const el = document.createElement('div');
+  el.className = 'step-indicator';
+  el.innerHTML = `<span class="step-num">Step ${step}</span><span class="step-line"></span><span style="color:var(--muted)">${step}/${total} max</span>`;
+  container.appendChild(el);
+  scrollToBottom();
+}
+
+// Tool card management
+let toolCardMap = {};
+function addToolCard(name, args, step) {
+  const container = document.getElementById('messages');
+  const target = args.command || args.filePath || args.folderPath || args.dirPath || '';
+  const icons = {
+    createFolder:'📁', createFile:'📝', readFile:'📖',
+    listDir:'📋', editFile:'✏️', deleteFile:'🗑️', runCommand:'⚡'
+  };
+
+  const card = document.createElement('div');
+  card.className = 'tool-card';
+  card.id = `tool-${step}-${name}`;
+  card.innerHTML = `
+    <div class="tool-card-header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="tool-icon">${icons[name] || '⚙️'}</span>
+      <span class="tool-name">${name}</span>
+      <span class="tool-target">${escapeHtml(target)}</span>
+      <span class="tool-status running">running</span>
+      <i class="fas fa-chevron-down chevron"></i>
+    </div>
+    <div class="tool-card-body"><pre></pre></div>
+  `;
+  container.appendChild(card);
+  toolCardMap[`${step}-${name}`] = card;
+  scrollToBottom();
+}
+
+function updateToolCard(name, result, isError) {
+  // Cari card terbaru dengan nama ini
+  const key = Object.keys(toolCardMap).filter(k => k.endsWith(`-${name}`)).pop();
+  if (!key) return;
+  const card = toolCardMap[key];
+  const statusEl = card.querySelector('.tool-status');
+  statusEl.textContent = isError ? 'error' : 'done';
+  statusEl.className = `tool-status ${isError ? 'error' : 'done'}`;
+  const pre = card.querySelector('.tool-card-body pre');
+  pre.textContent = (result || '').slice(0, 2000);
+  // Auto-open jika error
+  if (isError) card.classList.add('open');
+  scrollToBottom();
+}
+
+function addSystemMessage(text, type = 'info') {
+  const container = document.getElementById('messages');
+  const el = document.createElement('div');
+  const colors = { info: 'var(--blue)', warning: 'var(--yellow)', error: 'var(--red)' };
+  el.style.cssText = `text-align:center;padding:8px;font-size:12px;color:${colors[type] || colors.info};font-family:var(--font-mono);animation:msgIn .3s ease`;
+  el.textContent = text;
+  container.appendChild(el);
+  scrollToBottom();
+}
+
+function hideWelcome() {
+  const w = document.querySelector('.welcome');
+  if (w) w.remove();
+}
+
+function showWelcome() {
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML = `
+    <div class="welcome">
+      <div class="w-logo">C</div>
+      <h2>Coderly Web Interface</h2>
+      <p>Autonomous AI coding agent. Connect to OpenRouter, HuggingFace, or your local server.</p>
+      <div class="quick-actions">
+        <div class="quick-action" onclick="quickSend('List all files in the current directory')">List project files</div>
+        <div class="quick-action" onclick="quickSend('Explain the structure of this project')">Explain project</div>
+        <div class="quick-action" onclick="quickSend('Create a simple Express.js server with a /health endpoint')">Create a server</div>
+        <div class="quick-action" onclick="openConfigModal()">Configure provider</div>
+      </div>
+    </div>
+  `;
+}
+
+function quickSend(text) {
+  document.getElementById('msg-input').value = text;
+  sendMessage();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Chat Pages
+// ═══════════════════════════════════════════════════════════
+function newChatPage(name) {
+  name = name || `chat-${chatPages.size + 1}`;
+  if (!chatPages.has(name)) {
+    chatPages.set(name, { history: [], tokens: 0 });
+  }
+  switchPage(name);
+  renderPageList();
+}
+
+function switchPage(name) {
+  if (!chatPages.has(name)) {
+    chatPages.set(name, { history: [], tokens: 0 });
+  }
+  currentPage = name;
+  document.getElementById('page-title').textContent = name;
+  updateTokenCount();
+  renderPageList();
+  renderCurrentMessages();
+}
+
+function closeCurrentPage() {
+  if (currentPage === 'main') {
+    addSystemMessage('Cannot close the main chat page.', 'warning');
+    return;
+  }
+  chatPages.delete(currentPage);
+  switchPage('main');
+  renderPageList();
+}
+
+function printPages() {
+  let msg = 'Chat Pages:\n';
+  for (const [name, p] of chatPages) {
+    const active = name === currentPage ? '▶ ' : '  ';
+    const msgs = Math.floor(p.history.length / 2);
+    msg += `${active}${name} — ${msgs} msgs · ${p.tokens.toLocaleString()} tokens\n`;
+  }
+  addSystemMessage(msg.trim(), 'info');
+}
+
+function renderPageList() {
+  const list = document.getElementById('page-list');
+  list.innerHTML = '';
+  for (const [name, p] of chatPages) {
+    const el = document.createElement('div');
+    el.className = `chat-page-item${name === currentPage ? ' active' : ''}`;
+    const msgs = Math.floor(p.history.length / 2);
+    el.innerHTML = `
+      <i class="fas fa-message" style="font-size:11px;color:var(--muted)"></i>
+      <span class="page-name">${escapeHtml(name)}</span>
+      <span class="page-msgs">${msgs}</span>
+      ${name !== 'main' ? `<span class="page-close" onclick="event.stopPropagation();closePage('${escapeHtml(name)}')"><i class="fas fa-xmark"></i></span>` : ''}
+    `;
+    el.onclick = () => switchPage(name);
+    list.appendChild(el);
+  }
+}
+
+function closePage(name) {
+  chatPages.delete(name);
+  if (currentPage === name) switchPage('main');
+  renderPageList();
+}
+
+function renderCurrentMessages() {
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML = '';
+  const page = chatPages.get(currentPage);
+  if (!page || page.history.length === 0) {
+    showWelcome();
+    return;
+  }
+  for (const m of page.history) {
+    if (m.role === 'user') addMessageToUI('user', m.content);
+    else if (m.role === 'assistant') addMessageToUI('assistant', m.content);
+    // tool messages tidak ditampilkan di reload (bisa di-enhance nanti)
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Actions
+// ═══════════════════════════════════════════════════════════
+async function clearChat() {
+  const page = chatPages.get(currentPage);
+  if (page) { page.history = []; page.tokens = 0; }
+  updateTokenCount();
+  showWelcome();
+}
+
+async function undoLast() {
+  try {
+    const data = await api('/api/undo', { method: 'POST' });
+    addSystemMessage(data.message, 'info');
+  } catch (e) {
+    addSystemMessage('Undo failed: ' + e.message, 'error');
+  }
+}
+
+async function saveCurrentSession(name) {
+  const page = chatPages.get(currentPage);
+  if (!page) return;
+  name = name || `session-${Date.now()}`;
+  try {
+    const data = await api('/api/session/save', {
+      method: 'POST',
+      body: JSON.stringify({ name, history: page.history })
+    });
+    addSystemMessage(data.message, 'info');
+  } catch (e) {
+    addSystemMessage('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function loadSessionList() {
+  try {
+    const data = await api('/api/sessions');
+    if (!data.sessions.length) {
+      addSystemMessage('No saved sessions.', 'info');
+      return;
+    }
+    let msg = 'Saved sessions:\n' + data.sessions.map(s => `  · ${s}`).join('\n');
+    addSystemMessage(msg, 'info');
+  } catch (e) {
+    addSystemMessage('Failed to list sessions: ' + e.message, 'error');
+  }
+}
+
+async function fetchProviderInfo() {
+  try {
+    const data = await api('/api/provider');
+    document.getElementById('pv-detail').textContent = data.label;
+    addSystemMessage(`Provider: ${data.label}`, 'info');
+  } catch (e) {
+    addSystemMessage('Failed to fetch provider info.', 'error');
+  }
+}
+
+async function testLocalConnection() {
+  addSystemMessage('Testing local server connection...', 'info');
+  try {
+    const data = await api('/api/testlocal', { method: 'POST' });
+    addSystemMessage(data.message, data.ok ? 'info' : 'error');
+  } catch (e) {
+    addSystemMessage('Test failed: ' + e.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Config Modal
+// ═══════════════════════════════════════════════════════════
+function openConfigModal() {
+  // Fetch current config
+  api('/api/config').then(cfg => {
+    if (cfg.provider) {
+      document.getElementById('cfg-provider').value = cfg.provider;
+      onProviderChange();
+      if (cfg.provider === 'openrouter') {
+        document.getElementById('cfg-or-key').value = cfg.openrouter?.apiKey || '';
+        document.getElementById('cfg-or-model').value = cfg.openrouter?.model || '';
+      } else if (cfg.provider === 'huggingface') {
+        document.getElementById('cfg-hf-key').value = cfg.huggingface?.apiKey || '';
+        document.getElementById('cfg-hf-url').value = cfg.huggingface?.rawInput || '';
+      } else if (cfg.provider === 'local') {
+        document.getElementById('cfg-local-url').value = cfg.local?.baseUrl || '';
+        document.getElementById('cfg-local-model').value = cfg.local?.model || '';
+        document.getElementById('cfg-local-key').value = cfg.local?.apiKey || '';
+      }
+    }
+  }).catch(() => {});
+
+  document.getElementById('config-modal').style.display = 'flex';
+}
+
+function closeConfigModal() {
+  document.getElementById('config-modal').style.display = 'none';
+}
+
+function onProviderChange() {
+  const p = document.getElementById('cfg-provider').value;
+  document.getElementById('cfg-openrouter').style.display = p === 'openrouter' ? 'block' : 'none';
+  document.getElementById('cfg-huggingface').style.display = p === 'huggingface' ? 'block' : 'none';
+  document.getElementById('cfg-local').style.display = p === 'local' ? 'block' : 'none';
+}
+
+async function saveConfigFromModal() {
+  const provider = document.getElementById('cfg-provider').value;
+  const config = { provider, openrouter: {}, huggingface: {}, local: {} };
+
+  if (provider === 'openrouter') {
+    config.openrouter = {
+      apiKey: document.getElementById('cfg-or-key').value.trim(),
+      model: document.getElementById('cfg-or-model').value.trim() || 'gpt-oss-120b'
+    };
+  } else if (provider === 'huggingface') {
+    config.huggingface = {
+      apiKey: document.getElementById('cfg-hf-key').value.trim(),
+      rawInput: document.getElementById('cfg-hf-url').value.trim()
+    };
+  } else if (provider === 'local') {
+    config.local = {
+      baseUrl: document.getElementById('cfg-local-url').value.trim() || 'http://localhost:11434',
+      model: document.getElementById('cfg-local-model').value.trim(),
+      apiKey: document.getElementById('cfg-local-key').value.trim()
+    };
+  }
+
+  try {
+    await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify(config)
+    });
+    addSystemMessage('Configuration saved!', 'info');
+    closeConfigModal();
+    fetchProviderInfo();
+  } catch (e) {
+    addSystemMessage('Failed to save config: ' + e.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Help
+// ═══════════════════════════════════════════════════════════
+function showHelp() {
+  const helpText = `
+Commands:
+  /help          — Show this help
+  /clear         — Reset current chat
+  /undo          — Undo last file operation
+  /tokens        — Show token usage
+  /save [name]   — Save session
+  /sessions      — List saved sessions
+  /config        — Open configuration
+  /provider      — Show active provider
+  /testlocal     — Test local server connection
+  /newchat [n]   — Create new chat page
+  /chat <name>   — Switch to chat page
+  /closechat     — Close current page
+  /chats         — List all chat pages
+  /exit          — Exit info
+  `;
+  addSystemMessage(helpText.trim(), 'info');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  UI Helpers
+// ═══════════════════════════════════════════════════════════
+function updateTokenCount() {
+  const page = chatPages.get(currentPage);
+  document.getElementById('token-count').textContent =
+    `${(page?.tokens || 0).toLocaleString()} tokens`;
+}
+
+function updateSendButton(loading) {
+  const btn = document.getElementById('send-btn');
+  btn.disabled = loading;
+  btn.className = loading ? 'is-loading' : '';
+  btn.innerHTML = loading
+    ? '<i class="fas fa-stop"></i>'
+    : '<i class="fas fa-arrow-up"></i>';
+}
+
+function showStatus(text, color) {
+  let bar = document.querySelector('.status-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.className = 'status-bar';
+    document.getElementById('main').insertBefore(bar, document.getElementById('input-area'));
+  }
+  bar.innerHTML = `<span class="dot ${color}"></span> ${escapeHtml(text)}`;
+  bar.style.display = 'flex';
+}
+
+function hideStatus() {
+  const bar = document.querySelector('.status-bar');
+  if (bar) bar.style.display = 'none';
+}
+
+function updateConnectionStatus(ok) {
+  serverConnected = ok;
+  const el = document.getElementById('connection-status');
+  if (ok) {
+    el.innerHTML = '<span class="dot green" style="display:inline-block;vertical-align:middle"></span> Connected';
+  } else {
+    el.innerHTML = '<span class="dot red" style="display:inline-block;vertical-align:middle"></span> Disconnected';
+  }
+}
+
+function scrollToBottom() {
+  const msgs = document.getElementById('messages');
+  requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+}
+
+function handleInputKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const ov = document.getElementById('sidebar-overlay');
+  sb.classList.toggle('open');
+  sb.classList.toggle('collapsed');
+  ov.classList.toggle('show');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Init
+// ═══════════════════════════════════════════════════════════
+async function init() {
+  showWelcome();
+  renderPageList();
+
+  // Cek koneksi ke server & ambil info provider
+  try {
+    await fetchProviderInfo();
+    updateConnectionStatus(true);
+  } catch {
+    updateConnectionStatus(false);
+    addSystemMessage('Cannot connect to Coderly server. Make sure to run: node coderly.js --web', 'error');
+  }
+}
+
+init();
+</script>
+</body>
+</html>
