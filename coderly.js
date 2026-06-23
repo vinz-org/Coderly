@@ -28,17 +28,17 @@ const FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
 function createSpinner() {
     let fi = 0, text = '', id = null;
     return {
-        start(msg = 'Thinking...') {
+        start(msg = '🤔 Thinking...') {
             text = msg; fi = 0;
             if (id) clearInterval(id);
             id = setInterval(() => {
-                process.stdout.write(`\r  ${cyan(FRAMES[fi++ % FRAMES.length])} ${gray(text)}   `);
+                process.stdout.write(`\r  ${orange(FRAMES[fi++ % FRAMES.length])} ${gray(text)}   `);
             }, 80);
         },
         stop() {
             if (!id) return;
             clearInterval(id); id = null;
-            process.stdout.write('\r' + ' '.repeat(Math.max(text.length + 10, 50)) + '\r');
+            process.stdout.write(`\r` + ' '.repeat(Math.max(text.length + 10, 50)) + '\r');
         }
     };
 }
@@ -642,9 +642,9 @@ async function main() {
     const cwd      = process.cwd();
 
     console.log(orange('┌──────────────────────────────────────────────────────────┐'));
-    console.log(`${orange('│')}  ${orange('▐▛███▜▌')}  ${orangeBold('●  Coderly')}                          ${gray('v2.1.0')}      ${orange('│')}`);
-    console.log(`${orange('│')}  ${orange('▜█████▛▘')} ${gray('Autonomous Terminal AI Agent for Coding')}        ${orange('│')}`);
-    console.log(`${orange('│')}   ${orange('▘▘ ▝▝')}  ${gray('Providers: OpenRouter · HuggingFace')}             ${orange('│')}`);
+    console.log(`${orange('│')}  ${orange('▐█▛██▜▌')}  ${orangeBold('●  Coderly')}                          ${gray('v2.1.0')}     ${orange('│')}`);
+    console.log(`${orange('│')}  ${orange('▐█████▌')}  ${gray('Autonomous Terminal AI Agent for Coding')}        ${orange('│')}`);
+    console.log(`${orange('│')}  ${orange(' ▘▘▝▝  ')}  ${gray('Providers: OpenRouter · HuggingFace')}            ${orange('│')}`);
     console.log(orange('└──────────────────────────────────────────────────────────┘'));
 
     // ── Load / migrate config ──────────────────────────────────────────────────
@@ -837,4 +837,316 @@ ${orangeBold('HuggingFace URL formats:')}
     }
 }
 
-main();
+//═══════════════════════════════════════════════════════════
+//  Web Server Mode ( --web flag )
+// ═══════════════════════════════════════════════════════════
+import { createServer } from 'http';
+import { fileURLToPath } from 'url';
+
+
+async function startWebServer() {
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+    // Load config
+    let cfg = await getConfig();
+    cfg = await migrateOldConfig(cfg);
+
+    const needsSetup = !cfg.provider || (
+        cfg.provider === 'openrouter'  && !cfg.openrouter?.apiKey  ||
+        cfg.provider === 'huggingface' && (!cfg.huggingface?.apiKey || !cfg.huggingface?.endpoint) ||
+        cfg.provider === 'local'       && !cfg.local?.endpoint
+    );
+    if (needsSetup) {
+        console.log(yellow('\n⚠️  No configuration found. Run CLI mode first to configure:'));
+        console.log(gray('   node coderly.js'));
+        console.log(gray('   Then restart with --web flag.\n'));
+        // Auto-setup default local supaya bisa lanjut
+        cfg = {
+            provider: 'local',
+            openrouter: {},
+            huggingface: {},
+            local: { endpoint: 'http://localhost:11434/v1/chat/completions', baseUrl: 'http://localhost:11434', model: '', apiKey: '' }
+        };
+        await saveConfig(cfg);
+    }
+
+    // Load system instruction
+    let sysInstr = '';
+    try { sysInstr = await fs.readFile(path.join(process.cwd(), 'skills/skill.md'), 'utf8'); }
+    catch {
+        sysInstr = `You are Coderly, an autonomous terminal AI coding agent.
+TOOLS AVAILABLE: listDir, readFile, createFile, editFile, deleteFile, createFolder, runCommand
+BEHAVIOR RULES:
+1. Always start with listDir to understand project structure before making changes
+2. Always readFile before editFile — never assume file content
+3. Prefer editFile for targeted changes; only use createFile for new files
+4. After changes, verify by reading the file or running relevant commands
+5. Chain tools autonomously to complete tasks end-to-end without asking for confirmation
+6. Keep final text summaries concise — list what was done, not what you plan to do`;
+    }
+
+    // In-memory state untuk web sessions
+    const webSessions = new Map();
+
+    // ── SSE Agent Loop ─────────────────────────────────────────────────────
+    async function runAgentLoopSSE(cfg, sysInstr, history, tokenTotal, sendEvent) {
+        let step = 0, tokens = tokenTotal;
+
+        while (step < MAX_AGENT_STEPS) {
+            sendEvent('status', { text: 'Thinking...' });
+
+            const messages = [{ role: 'system', content: sysInstr }, ...history];
+            let data;
+            try {
+                data = await callAI(cfg, messages, openRouterTools);
+            } catch (err) {
+                sendEvent('error', { message: err.message });
+                return tokens;
+            }
+
+            const choice  = data.choices?.[0];
+            const message = choice?.message;
+            if (!message) {
+                sendEvent('error', { message: 'Invalid response from AI provider.' });
+                return tokens;
+            }
+
+            tokens += data.usage?.total_tokens ?? 0;
+            const toolCalls = message.tool_calls;
+
+            if (!toolCalls || toolCalls.length === 0) {
+                const txt = message.content ?? '';
+                if (txt) {
+                    // Kirim per bagian agar client bisa render incremental
+                    const chunkSize = 200;
+                    for (let i = 0; i < txt.length; i += chunkSize) {
+                        sendEvent('assistant', { content: txt.slice(i, i + chunkSize) });
+                    }
+                    history.push({ role: 'assistant', content: txt });
+                }
+                break;
+            }
+
+            step++;
+            sendEvent('step', { step, total: MAX_AGENT_STEPS });
+            history.push(message);
+
+            for (const call of toolCalls) {
+                const name = call.function.name;
+                let args = {};
+                try { args = JSON.parse(call.function.arguments); } catch { args = {}; }
+
+                sendEvent('tool_call', { name, args, step });
+
+                let result;
+                if (tools[name]) {
+                    result = await tools[name](args);
+                    sendEvent('tool_result', { name, result: result.slice(0, 2000), step, error: false });
+                } else {
+                    result = `Unknown tool: ${name}`;
+                    sendEvent('tool_result', { name, result, step, error: true });
+                }
+
+                history.push({ role: 'tool', tool_call_id: call.id, name, content: result });
+            }
+        }
+
+        if (step >= MAX_AGENT_STEPS) {
+            sendEvent('warning', { message: `Reached max agent steps (${MAX_AGENT_STEPS}).` });
+        }
+
+        return tokens;
+    }
+
+    // ── HTTP Server ────────────────────────────────────────────────────────
+    const server = createServer(async (req, res) => {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const pathname = url.pathname;
+
+        // CORS
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+        // ── Serve coderly.html ──────────────────────────────────────────
+        if (pathname === '/' || pathname === '/index.html') {
+            try {
+                const html = await fs.readFile(path.join(__dirname, 'coderly.html'), 'utf8');
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end(html);
+            } catch {
+                res.writeHead(404);
+                res.end('coderly.html not found');
+            }
+            return;
+        }
+
+        // ── POST /api/chat (SSE) ────────────────────────────────────────
+        if (pathname === '/api/chat' && req.method === 'POST') {
+            const body = await readBody(req);
+            let parsed;
+            try { parsed = JSON.parse(body); } catch {
+                res.writeHead(400); res.end('Invalid JSON'); return;
+            }
+
+            const { message, history, pageName } = parsed;
+            const chatHistory = history || [];
+
+            res.writeHead(200, {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no'
+            });
+
+            const sendEvent = (event, data) => {
+                res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+            };
+
+            try {
+                const tokens = await runAgentLoopSSE(cfg, sysInstr, chatHistory, 0, sendEvent);
+                sendEvent('done', { tokens, history: chatHistory });
+            } catch (err) {
+                sendEvent('error', { message: err.message });
+            }
+            res.end();
+            return;
+        }
+
+        // ── GET /api/config ─────────────────────────────────────────────
+        if (pathname === '/api/config' && req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(cfg));
+            return;
+        }
+
+        // ── POST /api/config ────────────────────────────────────────────
+        if (pathname === '/api/config' && req.method === 'POST') {
+            const body = await readBody(req);
+            let newCfg;
+            try { newCfg = JSON.parse(body); } catch {
+                res.writeHead(400); res.end('Invalid JSON'); return;
+            }
+
+            // Resolve endpoints
+            if (newCfg.provider === 'huggingface' && newCfg.huggingface?.rawInput) {
+                newCfg.huggingface.endpoint = resolveHFEndpoint(newCfg.huggingface.rawInput);
+            }
+            if (newCfg.provider === 'local' && newCfg.local?.baseUrl) {
+                newCfg.local.endpoint = resolveLocalEndpoint(newCfg.local.baseUrl);
+            }
+            if (newCfg.provider === 'openrouter' && !newCfg.openrouter?.model) {
+                newCfg.openrouter.model = 'gpt-oss-120b';
+            }
+
+            cfg = newCfg;
+            await saveConfig(cfg);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+            return;
+        }
+
+        // ── GET /api/provider ───────────────────────────────────────────
+        if (pathname === '/api/provider' && req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ label: getProviderLabel(cfg).replace(/\x1b\[[0-9;]*m/g, '') }));
+            return;
+        }
+
+        // ── POST /api/undo ──────────────────────────────────────────────
+        if (pathname === '/api/undo' && req.method === 'POST') {
+            const msg = await performUndo();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: msg }));
+            return;
+        }
+
+        // ── Session endpoints ───────────────────────────────────────────
+        if (pathname === '/api/session/save' && req.method === 'POST') {
+            const body = await readBody(req);
+            let parsed;
+            try { parsed = JSON.parse(body); } catch {
+                res.writeHead(400); res.end('Invalid JSON'); return;
+            }
+            const msg = await saveSession(parsed.name, parsed.history);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: msg }));
+            return;
+        }
+
+        if (pathname === '/api/sessions' && req.method === 'GET') {
+            const sessions = await listSessions();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ sessions }));
+            return;
+        }
+
+        // ── POST /api/testlocal ─────────────────────────────────────────
+        if (pathname === '/api/testlocal' && req.method === 'POST') {
+            if (cfg.provider !== 'local') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ ok: false, message: 'Current provider is not Local Server.' }));
+                return;
+            }
+            const endpoint = cfg.local?.endpoint;
+            if (!endpoint) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ ok: false, message: 'No endpoint configured.' }));
+                return;
+            }
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (cfg.local?.apiKey) headers['Authorization'] = `Bearer ${cfg.local.apiKey}`;
+                const body = { messages: [{ role: 'user', content: 'Hi' }], max_tokens: 5, stream: false };
+                if (cfg.local?.model) body.model = cfg.local.model;
+                const r = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
+                if (r.ok) {
+                    const data = await r.json();
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ ok: true, message: `Server responded! Status: ${r.status}. Model: ${data.model || 'unknown'}` }));
+                } else {
+                    const errText = await r.text();
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ ok: false, message: `Server error (${r.status}): ${errText.slice(0, 200)}` }));
+                }
+            } catch (err) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ ok: false, message: `Connection failed: ${err.message}` }));
+            }
+            return;
+        }
+
+        // 404
+        res.writeHead(404);
+        res.end('Not found');
+    });
+
+    // Helper: baca body dari request
+    function readBody(req) {
+        return new Promise((resolve, reject) => {
+            let data = '';
+            req.on('data', chunk => data += chunk);
+            req.on('end', () => resolve(data));
+            req.on('error', reject);
+        });
+    }
+
+    const PORT = process.env.PORT || 3000;
+    server.listen(PORT, () => {
+        console.log(orange('\n┌──────────────────────────────────────────────────────────┐'));
+        console.log(`${orange('│')}  ${orangeBold('Coderly Web Server')}                                   ${orange('│')}`);
+        console.log(`${orange('│')}  ${cyan(`http://localhost:${PORT}`)}                             ${orange('│')}`);
+        console.log(`${orange('│')}  ${gray('Provider:')} ${getProviderLabel(cfg)}${' '.repeat(40 - getProviderLabel(cfg).replace(/\x1b\[[0-9;]*m/g, '').length)}${orange('│')}`);
+        console.log(orange('└──────────────────────────────────────────────────────────┘\n'));
+    });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Entry Point
+// ═══════════════════════════════════════════════════════════
+if (process.argv.includes('--web')) {
+    startWebServer();
+} else {
+    main();
+}
